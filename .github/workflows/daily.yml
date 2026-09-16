@@ -13,10 +13,13 @@ on:
           - night
         default: auto
   schedule:
-    # One Short per window (US Eastern/EDT: 8am / 3pm / 9pm)
-    - cron: "0 12 * * *"
-    - cron: "0 19 * * *"
-    - cron: "0 1 * * *"
+  # One Short per window (US Eastern: 12pm / 6pm / 9pm)
+  - cron: "0 12 * * *"
+    timezone: "America/New_York"
+  - cron: "0 18 * * *"
+    timezone: "America/New_York"
+  - cron: "0 21 * * *"
+    timezone: "America/New_York"
 
 permissions:
   contents: write
@@ -41,12 +44,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "schedule" ]; then
-            case "$EVENT_SCHEDULE" in
-              "0 12 * * *") slot=morning ;;
-              "0 19 * * *") slot=afternoon ;;
-              "0 1 * * *") slot=night ;;
-              *) slot=auto ;;
-            esac
+  case "$EVENT_SCHEDULE" in
+    "0 12 * * *") slot=morning ;;
+    "0 18 * * *") slot=afternoon ;;
+    "0 21 * * *") slot=night ;;
+    *) slot=auto ;;
+  esac
           else
             slot="${INPUT_SLOT:-auto}"
           fi
