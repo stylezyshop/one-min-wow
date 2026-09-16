@@ -1,0 +1,127 @@
+name: Daily YouTube Short
+
+on:
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "Which window to post"
+        type: choice
+        options:
+          - auto
+          - morning
+          - afternoon
+          - night
+        default: auto
+  schedule:
+    # One Short per window (US Eastern/EDT: 8am / 3pm / 9pm)
+    - cron: "0 12 * * *"
+    - cron: "0 19 * * *"
+    - cron: "0 1 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  post-short:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # GitHub can start a scheduled job hours late. Clock-based "auto"
+      # then flips morning into afternoon (and afternoon into night).
+      # Bind each cron to its window so lag cannot change the niche.
+      - name: Resolve post slot
+        id: slot
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          INPUT_SLOT: ${{ github.event.inputs.slot }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            case "$EVENT_SCHEDULE" in
+              "0 12 * * *") slot=morning ;;
+              "0 19 * * *") slot=afternoon ;;
+              "0 1 * * *") slot=night ;;
+              *) slot=auto ;;
+            esac
+          else
+            slot="${INPUT_SLOT:-auto}"
+          fi
+          echo "slot=$slot" >> "$GITHUB_OUTPUT"
+          echo "Post slot: $slot (event=$EVENT_NAME schedule=${EVENT_SCHEDULE:-none})"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Do not use apt. Azure Ubuntu mirrors hung twice on 2026-08-19
+      # and killed the morning slot before python started.
+      # FedericoCarboni/setup-ffmpeg@v3 now dies with TypeError: fetch failed
+      # on Node 24 runners. Pull a static build from GitHub instead.
+      - name: Setup ffmpeg
+        run: |
+          set -euo pipefail
+          url="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+          for i in 1 2 3 4 5; do
+            if curl -fL --retry 3 --retry-delay 2 -o /tmp/ffmpeg.tar.xz "$url"; then
+              break
+            fi
+            echo "ffmpeg download attempt $i failed"
+            sleep $((i * 3))
+          done
+          mkdir -p /tmp/ffmpeg-extract
+          tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg-extract
+          bin_dir="$(find /tmp/ffmpeg-extract -type d -name bin -print -quit)"
+          sudo install -m 755 "$bin_dir/ffmpeg" /usr/local/bin/ffmpeg
+          sudo install -m 755 "$bin_dir/ffprobe" /usr/local/bin/ffprobe
+          ffmpeg -version
+
+      - name: Ensure a caption font
+        run: |
+          if [ -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ] \
+            || [ -f /usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf ]; then
+            echo "Caption font already present"
+          else
+            sudo mkdir -p /usr/share/fonts/truetype/dejavu
+            sudo curl -fsSL -o /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf \
+              https://github.com/dejavu-fonts/dejavu-fonts/raw/version_2_37/ttf/DejaVuSans-Bold.ttf
+          fi
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily pipeline
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          POST_SLOT: ${{ steps.slot.outputs.slot }}
+        run: python main.py
+
+      - name: Save used topics
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reports/used_topics.json
+          if git diff --cached --quiet; then
+            echo "No used-topic changes"
+          else
+            git commit -m "Record posted SilentVision topic"
+            git pull --rebase origin master
+            git push
+          fi
+
+      - name: Notify phone if the post failed
+        if: failure() || cancelled()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          POST_SLOT: ${{ steps.slot.outputs.slot }}
+        run: python -c "from src.notify import notify_failed; notify_failed()"
