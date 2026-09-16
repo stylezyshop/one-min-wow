@@ -45,11 +45,11 @@ jobs:
           set -euo pipefail
           if [ "$EVENT_NAME" = "schedule" ]; then
             case "$EVENT_SCHEDULE" in
-            "0 12 * * *") slot=morning ;;
-            "0 18 * * *") slot=afternoon ;;
-            "0 21 * * *") slot=night ;;
-            *) slot=auto ;;
-          esac
+              "0 12 * * *") slot=morning ;;
+              "0 18 * * *") slot=afternoon ;;
+              "0 21 * * *") slot=night ;;
+              *) slot=auto ;;
+            esac
           else
             slot="${INPUT_SLOT:-auto}"
           fi
