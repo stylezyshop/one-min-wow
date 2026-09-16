@@ -142,7 +142,7 @@ def main():
         return
     if command in ("notify-test", "test-notify"):
         ok = notify_posted(
-            title="How Come? phone test",
+            title="One Minute WOW phone test",
             video_id="GVpLZROBLR0",
             duration=49,
             window="test",
